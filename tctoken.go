@@ -158,7 +158,7 @@ func (cli *Client) deleteExpiredPrivacyTokens() {
 func (cli *Client) issuePrivacyTokenAndSave(jid types.JID, senderTimestamp time.Time) {
 	ctx := cli.BackgroundEventCtx
 	storageJID := jid.ToNonAD()
-	_, err := cli.issuePrivacyToken(ctx, storageJID, senderTimestamp)
+	_, err := cli.IssuePrivacyToken(ctx, storageJID, senderTimestamp)
 	if err != nil {
 		cli.Log.Errorf("Failed to issue privacy token for %s: %v", jid, err)
 		return
@@ -179,8 +179,8 @@ func (cli *Client) issuePrivacyTokenAndSave(jid types.JID, senderTimestamp time.
 	}
 }
 
-// issuePrivacyToken sends an IQ to the server to issue a privacy token for the given JID.
-func (cli *Client) issuePrivacyToken(ctx context.Context, jid types.JID, timestamp time.Time) (*waBinary.Node, error) {
+// IssuePrivacyToken sends an IQ to the server to issue a privacy token for the given JID.
+func (cli *Client) IssuePrivacyToken(ctx context.Context, jid types.JID, timestamp time.Time) (*waBinary.Node, error) {
 	return cli.sendIQ(ctx, infoQuery{
 		Namespace: "privacy",
 		Type:      iqSet,
