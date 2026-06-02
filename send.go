@@ -39,6 +39,9 @@ import (
 
 const WebMessageIDPrefix = "3EB0"
 
+type retry463KeyType struct{}
+var retry463Key retry463KeyType
+
 // GenerateMessageID generates a random string that can be used as a message ID on WhatsApp.
 //
 //	msgID := cli.GenerateMessageID()
@@ -375,81 +378,105 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	// Sending multiple messages at a time can cause weird issues and makes it harder to retry safely
 	// This is also required for the session prefetching that makes group sends faster
 	// (everything will explode if you send a message to the same user twice in parallel)
-	cli.messageSendLock.Lock()
-	resp.DebugTimings.Queue = time.Since(start)
-	defer cli.messageSendLock.Unlock()
-
-	// Peer message retries aren't implemented yet
-	if !req.Peer {
-		err = cli.addRecentMessage(ctx, to, req.ID, message, nil)
-		if err != nil {
-			return
-		}
-	}
-
-	if message.GetMessageContextInfo().GetMessageSecret() != nil {
-		err = cli.Store.MsgSecrets.PutMessageSecret(ctx, to, ownID, req.ID, message.GetMessageContextInfo().GetMessageSecret())
-		if err != nil {
-			cli.Log.Warnf("Failed to store message secret key for outgoing message %s: %v", req.ID, err)
-		} else {
-			cli.Log.Debugf("Stored message secret key for outgoing message %s", req.ID)
-		}
-	}
-
-	respChan := cli.waitResponse(req.ID)
+	var respNode *waBinary.Node
 	var phash string
 	var data []byte
-	switch to.Server {
-	case types.GroupServer, types.BroadcastServer:
-		phash, data, err = cli.sendGroup(ctx, ownID, to, groupParticipants, req.ID, message, &resp.DebugTimings, extraParams)
-	case types.DefaultUserServer, types.BotServer, types.HiddenUserServer:
-		if req.Peer {
-			data, err = cli.sendPeerMessage(ctx, to, req.ID, message, &resp.DebugTimings)
-		} else {
-			phash, data, err = cli.sendDM(ctx, ownID, to, req.ID, message, &resp.DebugTimings, extraParams)
+
+	err = func() error {
+		cli.messageSendLock.Lock()
+		defer cli.messageSendLock.Unlock()
+
+		resp.DebugTimings.Queue = time.Since(start)
+
+		// Peer message retries aren't implemented yet
+		if !req.Peer {
+			err = cli.addRecentMessage(ctx, to, req.ID, message, nil)
+			if err != nil {
+				return err
+			}
 		}
-	case types.NewsletterServer:
-		data, err = cli.sendNewsletter(ctx, to, req.ID, message, req.MediaHandle, &resp.DebugTimings)
-	default:
-		err = fmt.Errorf("%w %s", ErrUnknownServer, to.Server)
-	}
-	start = time.Now()
-	if err != nil {
-		cli.cancelResponse(req.ID, respChan)
-		return
-	}
-	var respNode *waBinary.Node
-	var timeoutChan <-chan time.Time
-	if req.Timeout > 0 {
-		timeoutChan = time.After(req.Timeout)
-	} else {
-		timeoutChan = make(<-chan time.Time)
-	}
-	select {
-	case respNode = <-respChan:
-	case <-timeoutChan:
-		cli.cancelResponse(req.ID, respChan)
-		err = ErrMessageTimedOut
-		return
-	case <-ctx.Done():
-		cli.cancelResponse(req.ID, respChan)
-		err = ctx.Err()
-		return
-	}
-	resp.DebugTimings.Resp = time.Since(start)
-	if isDisconnectNode(respNode) {
+
+		if message.GetMessageContextInfo().GetMessageSecret() != nil {
+			err = cli.Store.MsgSecrets.PutMessageSecret(ctx, to, ownID, req.ID, message.GetMessageContextInfo().GetMessageSecret())
+			if err != nil {
+				cli.Log.Warnf("Failed to store message secret key for outgoing message %s: %v", req.ID, err)
+			} else {
+				cli.Log.Debugf("Stored message secret key for outgoing message %s", req.ID)
+			}
+		}
+
+		respChan := cli.waitResponse(req.ID)
+		switch to.Server {
+		case types.GroupServer, types.BroadcastServer:
+			phash, data, err = cli.sendGroup(ctx, ownID, to, groupParticipants, req.ID, message, &resp.DebugTimings, extraParams)
+		case types.DefaultUserServer, types.BotServer, types.HiddenUserServer:
+			if req.Peer {
+				data, err = cli.sendPeerMessage(ctx, to, req.ID, message, &resp.DebugTimings)
+			} else {
+				phash, data, err = cli.sendDM(ctx, ownID, to, req.ID, message, &resp.DebugTimings, extraParams)
+			}
+		case types.NewsletterServer:
+			data, err = cli.sendNewsletter(ctx, to, req.ID, message, req.MediaHandle, &resp.DebugTimings)
+		default:
+			err = fmt.Errorf("%w %s", ErrUnknownServer, to.Server)
+		}
 		start = time.Now()
-		respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
-		resp.DebugTimings.Retry = time.Since(start)
 		if err != nil {
-			return
+			cli.cancelResponse(req.ID, respChan)
+			return err
 		}
+		var timeoutChan <-chan time.Time
+		if req.Timeout > 0 {
+			timeoutChan = time.After(req.Timeout)
+		} else {
+			timeoutChan = make(<-chan time.Time)
+		}
+		select {
+		case respNode = <-respChan:
+		case <-timeoutChan:
+			cli.cancelResponse(req.ID, respChan)
+			return ErrMessageTimedOut
+		case <-ctx.Done():
+			cli.cancelResponse(req.ID, respChan)
+			return ctx.Err()
+		}
+		resp.DebugTimings.Resp = time.Since(start)
+		if isDisconnectNode(respNode) {
+			start = time.Now()
+			respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
+			resp.DebugTimings.Retry = time.Since(start)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		return
 	}
+
 	ag := respNode.AttrGetter()
 	resp.ServerID = types.MessageServerID(ag.OptionalInt("server_id"))
 	resp.Timestamp = ag.UnixTime("t")
 	if errorCode := ag.Int("error"); errorCode != 0 {
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
+		if errorCode == 463 && ctx.Value(retry463Key) == nil {
+			storageJID := cli.resolveTCTokenStorageLID(ctx, to)
+			cli.Log.Infof("Message send to %s failed with 463 (privacy token required). Requesting new token...", to)
+			_, tokenErr := cli.IssuePrivacyToken(ctx, storageJID, time.Now())
+			if tokenErr != nil {
+				cli.Log.Warnf("Failed to request privacy token for %s: %v", storageJID, tokenErr)
+			} else {
+				select {
+				case <-time.After(500 * time.Millisecond):
+				case <-ctx.Done():
+					return resp, ctx.Err()
+				}
+				cli.Log.Infof("Retrying message send to %s after privacy token request...", to)
+				retryCtx := context.WithValue(ctx, retry463Key, true)
+				return cli.SendMessage(retryCtx, to, message, extra...)
+			}
+		}
 	}
 	expectedPHash := ag.OptionalString("phash")
 	if len(expectedPHash) > 0 && phash != expectedPHash {
