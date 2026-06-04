@@ -23,7 +23,7 @@ type FrameSocket struct {
 	parentCtx context.Context
 	cancelCtx context.Context
 	cancel    context.CancelFunc
-	conn      *websocket.Conn
+	conn      atomic.Pointer[websocket.Conn]
 	log       waLog.Logger
 	lock      sync.Mutex
 
@@ -57,30 +57,30 @@ func NewFrameSocket(log waLog.Logger, client *http.Client) *FrameSocket {
 }
 
 func (fs *FrameSocket) IsConnected() bool {
-	return fs.conn != nil
+	return fs.conn.Load() != nil
 }
 
 func (fs *FrameSocket) Close(code websocket.StatusCode) {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
 
-	if fs.conn == nil {
+	conn := fs.conn.Swap(nil)
+	if conn == nil {
 		return
 	}
 
 	fs.closed.Store(true)
 	if code > 0 {
-		err := fs.conn.Close(code, "")
+		err := conn.Close(code, "")
 		if err != nil {
 			fs.log.Warnf("Error sending close to websocket: %v", err)
 		}
 	} else {
-		err := fs.conn.CloseNow()
+		err := conn.CloseNow()
 		if err != nil {
 			fs.log.Debugf("Error force closing websocket: %v", err)
 		}
 	}
-	fs.conn = nil
 	fs.cancel()
 	fs.cancel = nil
 	if fs.OnDisconnect != nil {
@@ -91,7 +91,7 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
 func (fs *FrameSocket) Connect(ctx context.Context) error {
 	fs.lock.Lock()
 	defer fs.lock.Unlock()
-	if fs.conn != nil {
+	if fs.conn.Load() != nil {
 		return ErrSocketAlreadyOpen
 	}
 	fs.parentCtx = ctx
@@ -108,7 +108,7 @@ func (fs *FrameSocket) Connect(ctx context.Context) error {
 	}
 	conn.SetReadLimit(FrameMaxSize)
 
-	fs.conn = conn
+	fs.conn.Store(conn)
 
 	go fs.readPump(conn, ctx)
 	return nil
@@ -119,7 +119,7 @@ func (fs *FrameSocket) Context() context.Context {
 }
 
 func (fs *FrameSocket) SendFrame(data []byte) error {
-	conn := fs.conn
+	conn := fs.conn.Load()
 	if conn == nil {
 		return ErrSocketClosed
 	}
