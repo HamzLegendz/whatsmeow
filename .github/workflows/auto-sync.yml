@@ -1,0 +1,37 @@
+name: Auto Sync Upstream
+on:
+  schedule:
+    # Berjalan otomatis setiap jam 00:00 (tengah malam) UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Memungkinkan kamu menjalankan workflow secara manual dari tab Actions
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }} # Gunakan PAT di secret (misal: rahasia repo) jika ingin bypass batasan bot
+
+      - name: Configure Git for HamzLegendz
+        run: |
+          git config --global user.name "HamzLegendz"
+          # Ganti email di bawah ini dengan email asli GitHub kamu jika ada
+          git config --global user.email "hamzlegendz@users.noreply.github.com"
+
+      - name: Fetch and Merge Upstream
+        run: |
+          # Tambahkan remote upstream tulir
+          git remote add upstream https://github.com/tulir/whatsmeow.git
+          git fetch upstream
+
+          # Checkout ke branch utama (ganti jika ingin sync branch tertentu misal fork-05-06-2026)
+          git checkout fork-05-06-2026 || git checkout main
+          
+          # Merge dari upstream main (akan mengutamakan perubahan upstream jika ada konflik)
+          git merge upstream/main -X theirs -m "Auto-merge upstream proto updates"
+
+          # Push kembali ke repository origin milikmu
+          git push origin HEAD
