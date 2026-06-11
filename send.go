@@ -1322,9 +1322,7 @@ func (cli *Client) encryptMessageForDevices(
 	sessionAddressToJID := make(map[string]types.JID, len(allDevices))
 	sessionAddresses := make([]string, 0, len(allDevices))
 	for _, jid := range allDevices {
-		if dsmPlaintext != nil && (jid == ownJID || jid == ownLID) {
-			// There's never a session with ourselves; prefetching one would
-			// put it in retryDevices and fetch prekeys on every message.
+		if jid == ownJID || jid == ownLID {
 			continue
 		}
 		encryptionIdentity := jid
@@ -1374,10 +1372,10 @@ func (cli *Client) encryptMessageForDevices(
 
 	for _, jid := range allDevices {
 		plaintext := msgPlaintext
+		if jid == ownJID || jid == ownLID {
+			continue
+		}
 		if (jid.User == ownJID.User || jid.User == ownLID.User) && dsmPlaintext != nil {
-			if jid == ownJID || jid == ownLID {
-				continue
-			}
 			plaintext = dsmPlaintext
 		}
 		encrypted, isPreKey, err := cli.encryptMessageForDeviceAndWrap(

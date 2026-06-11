@@ -531,8 +531,7 @@ func (cli *Client) encryptMessageForDevicesV3(
 	sessionAddresses := make([]string, 0, len(allDevices))
 	for _, jid := range allDevices {
 		if jid == ownID {
-			// There's never a session with ourselves; prefetching one would
-			// trigger a prekey fetch on every message.
+
 			continue
 		}
 		addr := jid.SignalAddress().String()
@@ -567,11 +566,11 @@ func (cli *Client) encryptMessageForDevicesV3(
 	}
 
 	for _, jid := range allDevices {
+		if jid == ownID {
+			continue
+		}
 		var dsmForDevice *waMsgTransport.MessageTransport_Protocol_Integral_DeviceSentMessage
 		if jid.User == ownID.User {
-			if jid == ownID {
-				continue
-			}
 			dsmForDevice = dsm
 		}
 		encrypted, err := cli.encryptMessageForDeviceAndWrapV3(ctx, payload, skdm, dsmForDevice, jid, bundles[jid], encAttrs)
