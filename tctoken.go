@@ -158,7 +158,8 @@ func (cli *Client) deleteExpiredPrivacyTokens() {
 func (cli *Client) issuePrivacyTokenAndSave(jid types.JID, senderTimestamp time.Time) {
 	ctx := cli.BackgroundEventCtx
 	storageJID := jid.ToNonAD()
-	_, err := cli.IssuePrivacyToken(ctx, storageJID, senderTimestamp)
+	issuanceJID := cli.resolveTCTokenIssuanceJID(ctx, storageJID)
+	_, err := cli.IssuePrivacyToken(ctx, issuanceJID, senderTimestamp)
 	if err != nil {
 		cli.Log.Errorf("Failed to issue privacy token for %s: %v", jid, err)
 		return
