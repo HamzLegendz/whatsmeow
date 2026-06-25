@@ -56,12 +56,16 @@ type phoneLinkingCache struct {
 	pairingRef  string
 }
 
-func generateCompanionEphemeralKey() (ephemeralKeyPair *keys.KeyPair, ephemeralKey []byte, encodedLinkingCode string) {
+func generateCompanionEphemeralKey(pairingCode string) (ephemeralKeyPair *keys.KeyPair, ephemeralKey []byte, encodedLinkingCode string) {
 	ephemeralKeyPair = keys.NewKeyPair()
 	salt := random.Bytes(32)
 	iv := random.Bytes(16)
-	linkingCode := random.Bytes(5)
-	encodedLinkingCode = linkingBase32.EncodeToString(linkingCode)
+	if pairingCode != "" && len(pairingCode) == 8 {
+		encodedLinkingCode = pairingCode
+	} else {
+		linkingCode := random.Bytes(5)
+		encodedLinkingCode = linkingBase32.EncodeToString(linkingCode)
+	}
 	linkCodeKey := pbkdf2.Key([]byte(encodedLinkingCode), salt, 2<<16, 32, sha256.New)
 	linkCipherBlock, _ := aes.NewCipher(linkCodeKey)
 	encryptedPubkey := ephemeralKeyPair.Pub[:]
@@ -89,11 +93,17 @@ func generateCompanionEphemeralKey() (ephemeralKeyPair *keys.KeyPair, ephemeralK
 // (the server will validate it and return 400 if it's wrong).
 //
 // See https://faq.whatsapp.com/1324084875126592 for more info
-func (cli *Client) PairPhone(ctx context.Context, phone string, showPushNotification bool, clientType PairClientType, clientDisplayName string) (string, error) {
+//
+// Deprecated: Standard client displayName and clientType now suffice. Variadic pairingCode matches old custom pairing.
+func (cli *Client) PairPhone(ctx context.Context, phone string, showPushNotification bool, clientType PairClientType, clientDisplayName string, pairingCode ...string) (string, error) {
 	if cli == nil {
 		return "", ErrClientIsNil
 	}
-	ephemeralKeyPair, ephemeralKey, encodedLinkingCode := generateCompanionEphemeralKey()
+	var pairCode string
+	if len(pairingCode) > 0 && pairingCode[0] != "" {
+		pairCode = pairingCode[0]
+	}
+	ephemeralKeyPair, ephemeralKey, encodedLinkingCode := generateCompanionEphemeralKey(pairCode)
 	phone = notNumbers.ReplaceAllString(phone, "")
 	if len(phone) <= 6 {
 		return "", ErrPhoneNumberTooShort
