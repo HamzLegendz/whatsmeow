@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rs/zerolog"
 	"go.mau.fi/util/random"
 	"google.golang.org/protobuf/proto"
 
@@ -130,10 +131,23 @@ func (cli *Client) decryptMsgSecret(ctx context.Context, msg *events.Message, us
 		if !realSender.IsEmpty() && realSender != origSender {
 			secretKey2, additionalData2 := generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), realSender, baseEncKey)
 			if plaintext2, err2 := gcmutil.Decrypt(secretKey2, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData2); err2 == nil {
+				zerolog.Ctx(ctx).Debug().
+					Str("orig_message_id", origMsgKey.GetID()).
+					Str("secret_message_id", msg.Info.ID).
+					Stringer("stored_orig_sender", realSender).
+					Stringer("key_orig_sender", origSender).
+					Msg("Decrypted message secret with orig sender hack")
 				return plaintext2, nil
 			}
 		}
-		return nil, fmt.Errorf("failed to decrypt secret message: %w", err)
+		return nil, fmt.Errorf("failed to decrypt secret message: %w (sender: %s, orig sender: %s and %s)", err, msg.Info.Sender, origSender, realSender)
+	} else {
+		zerolog.Ctx(ctx).Debug().
+			Str("orig_message_id", origMsgKey.GetID()).
+			Str("secret_message_id", msg.Info.ID).
+			Stringer("stored_orig_sender", realSender).
+			Stringer("key_orig_sender", origSender).
+			Msg("Decrypted message secret without hack")
 	}
 	return plaintext, nil
 }
