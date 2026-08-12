@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -103,7 +102,19 @@ func (cli *Client) decryptMsgSecret(ctx context.Context, msg *events.Message, us
 	if err != nil {
 		return nil, err
 	}
-	baseEncKey, storedOrigSender, err := cli.Store.MsgSecrets.GetMessageSecret(ctx, msg.Info.Chat, origSender, origMsgKey.GetID())
+	// GetMessageSecret transparently resolves @lid↔@s.whatsapp.net via
+	// whatsmeow_lid_map and returns whichever sender form the secret was
+	// originally stored under (realSender). We intentionally *do not*
+	// override the caller's origSender with realSender here: the HKDF
+	// context used to derive the symmetric key includes the sender JID
+	// string, and the peer that encrypted the message used the JID form
+	// present on the echoed origMsgKey (i.e. the same form we have in
+	// origSender above). Overriding with a differently-represented
+	// realSender — which happens after chat migration when the secret
+	// was stored pre-migration as @s.whatsapp.net but the vote key
+	// arrives as @lid (or vice-versa) — produces a mismatched HKDF
+	// context and GCM auth fails.
+	baseEncKey, realSender, err := cli.Store.MsgSecrets.GetMessageSecret(ctx, msg.Info.Chat, origSender, origMsgKey.GetID())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get original message secret key: %w", err)
 	}
