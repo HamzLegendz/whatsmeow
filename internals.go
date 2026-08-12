@@ -788,7 +788,7 @@ func (int *DangerousInternalClient) IssuePrivacyTokenAndSave(jid types.JID, send
 }
 
 func (int *DangerousInternalClient) IssuePrivacyToken(ctx context.Context, jid types.JID, timestamp time.Time) (*waBinary.Node, error) {
-	return int.c.issuePrivacyToken(ctx, jid, timestamp)
+	return int.c.IssuePrivacyToken(ctx, jid, timestamp)
 }
 
 func (int *DangerousInternalClient) RawUpload(ctx context.Context, dataToUpload io.Reader, uploadSize uint64, fileHash []byte, appInfo MediaType, newsletter bool, resp *UploadResponse) error {

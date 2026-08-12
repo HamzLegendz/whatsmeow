@@ -124,28 +124,24 @@ func (cli *Client) decryptMsgSecret(ctx context.Context, msg *events.Message, us
 	secretKey, additionalData := generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), origSender, baseEncKey)
 	plaintext, err := gcmutil.Decrypt(secretKey, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData)
 	if err != nil {
-		// Hack for trying both the original sender in the new message and the one who we received the secret key from.
-		// This will hopefully become unnecessary when WhatsApp fully finishes their migration to LIDs.
-		if origSender != storedOrigSender && strings.Contains(err.Error(), "message authentication failed") {
-			secretKey, additionalData = generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), storedOrigSender, baseEncKey)
-			plaintext, err = gcmutil.Decrypt(secretKey, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData)
-			if err == nil {
+		if !realSender.IsEmpty() && realSender != origSender {
+			secretKey2, additionalData2 := generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), realSender, baseEncKey)
+			if plaintext2, err2 := gcmutil.Decrypt(secretKey2, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData2); err2 == nil {
 				zerolog.Ctx(ctx).Debug().
 					Str("orig_message_id", origMsgKey.GetID()).
 					Str("secret_message_id", msg.Info.ID).
-					Stringer("stored_orig_sender", storedOrigSender).
+					Stringer("stored_orig_sender", realSender).
 					Stringer("key_orig_sender", origSender).
 					Msg("Decrypted message secret with orig sender hack")
+				return plaintext2, nil
 			}
 		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt secret message: %w (sender: %s, orig sender: %s and %s)", err, msg.Info.Sender, origSender, storedOrigSender)
-		}
+		return nil, fmt.Errorf("failed to decrypt secret message: %w (sender: %s, orig sender: %s and %s)", err, msg.Info.Sender, origSender, realSender)
 	} else {
 		zerolog.Ctx(ctx).Debug().
 			Str("orig_message_id", origMsgKey.GetID()).
 			Str("secret_message_id", msg.Info.ID).
-			Stringer("stored_orig_sender", storedOrigSender).
+			Stringer("stored_orig_sender", realSender).
 			Stringer("key_orig_sender", origSender).
 			Msg("Decrypted message secret without hack")
 	}
