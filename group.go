@@ -503,12 +503,34 @@ func (cli *Client) GetGroupInfoFromLink(ctx context.Context, code string) (*type
 
 // JoinGroupWithLink joins the group using the given invite link.
 func (cli *Client) JoinGroupWithLink(ctx context.Context, code string) (types.JID, error) {
+	cleanCode := stripURLPrefix(code, InviteLinkPrefix)
 	resp, err := cli.sendGroupIQ(ctx, iqSet, types.GroupServerJID, waBinary.Node{
 		Tag: "invite",
 		Attrs: waBinary.Attrs{
-			"code": stripURLPrefix(code, InviteLinkPrefix),
+			"code": cleanCode,
 		},
 	})
+	if err != nil && (strings.Contains(err.Error(), "463") || strings.Contains(err.Error(), "account_reachout_restricted")) {
+		// Fallback: Query info from link first to prime server state
+		_, _ = cli.GetGroupInfoFromLink(ctx, cleanCode)
+
+		// Retry with "accept" tag fallback
+		resp, err = cli.sendGroupIQ(ctx, iqSet, types.GroupServerJID, waBinary.Node{
+			Tag: "accept",
+			Attrs: waBinary.Attrs{
+				"code": cleanCode,
+			},
+		})
+		if err != nil && (strings.Contains(err.Error(), "463") || strings.Contains(err.Error(), "account_reachout_restricted")) {
+			// Retry invite tag once more after priming group info state
+			resp, err = cli.sendGroupIQ(ctx, iqSet, types.GroupServerJID, waBinary.Node{
+				Tag: "invite",
+				Attrs: waBinary.Attrs{
+					"code": cleanCode,
+				},
+			})
+		}
+	}
 	if errors.Is(err, ErrIQGone) {
 		return types.EmptyJID, wrapIQError(ErrInviteLinkRevoked, err)
 	} else if errors.Is(err, ErrIQNotAcceptable) {
