@@ -159,20 +159,17 @@ func (cli *Client) GetContactQRLink(ctx context.Context, revoke bool) (string, e
 	return ag.String("code"), ag.Error()
 }
 
+const mutationUpdateTextStatus = "9152604461510864"
+
 // SetStatusMessage updates the current user's status text, which is shown in the "About" section in the user profile.
 //
 // This is different from the ephemeral status broadcast messages. Use SendMessage to types.StatusBroadcastJID to send
 // such messages.
-func (cli *Client) SetStatusMessage(ctx context.Context, msg string) error {
-	_, err := cli.sendIQ(ctx, infoQuery{
-		Namespace: "status",
-		Type:      iqSet,
-		To:        types.ServerJID,
-		Content: []waBinary.Node{{
-			Tag:     "status",
-			Content: msg,
-		}},
+func (cli *Client) SetStatusMessage(ctx context.Context, status types.SetStatusInput) error {
+	_, err := cli.sendMexIQ(ctx, mutationUpdateTextStatus, map[string]any{
+		"input": &status,
 	})
+	// TODO check output result?
 	return err
 }
 
@@ -1029,7 +1026,6 @@ func (cli *Client) UpdateBlocklist(ctx context.Context, jid types.JID, action ev
 	itemAttrs := waBinary.Attrs{
 		"jid":    lidJID,
 		"action": string(action),
-		"dhash":  strconv.FormatInt(time.Now().UnixMilli(), 10),
 	}
 	if action == events.BlocklistChangeActionBlock && !pnJID.IsEmpty() {
 		itemAttrs["pn_jid"] = pnJID
