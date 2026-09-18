@@ -121,31 +121,42 @@ func (cli *Client) decryptMsgSecret(ctx context.Context, msg *events.Message, us
 	if baseEncKey == nil {
 		return nil, ErrOriginalMessageSecretNotFound
 	}
-	secretKey, additionalData := generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), origSender, baseEncKey)
-	plaintext, err := gcmutil.Decrypt(secretKey, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData)
-	if err != nil {
-		if !realSender.IsEmpty() && realSender != origSender {
-			secretKey2, additionalData2 := generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), realSender, baseEncKey)
-			if plaintext2, err2 := gcmutil.Decrypt(secretKey2, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData2); err2 == nil {
-				zerolog.Ctx(ctx).Debug().
-					Str("orig_message_id", origMsgKey.GetID()).
-					Str("secret_message_id", msg.Info.ID).
-					Stringer("stored_orig_sender", realSender).
-					Stringer("key_orig_sender", origSender).
-					Msg("Decrypted message secret with orig sender hack")
-				return plaintext2, nil
-			}
-		}
-		return nil, fmt.Errorf("failed to decrypt secret message: %w (sender: %s, orig sender: %s and %s)", err, msg.Info.Sender, origSender, realSender)
-	} else {
-		zerolog.Ctx(ctx).Debug().
-			Str("orig_message_id", origMsgKey.GetID()).
-			Str("secret_message_id", msg.Info.ID).
-			Stringer("stored_orig_sender", realSender).
-			Stringer("key_orig_sender", origSender).
-			Msg("Decrypted message secret without hack")
+	senderList := []types.JID{msg.Info.Sender}
+	if !msg.Info.SenderAlt.IsEmpty() && msg.Info.SenderAlt.ToNonAD() != msg.Info.Sender.ToNonAD() {
+		senderList = append(senderList, msg.Info.SenderAlt)
 	}
-	return plaintext, nil
+	origList := []types.JID{origSender}
+	if !realSender.IsEmpty() && realSender != origSender {
+		origList = append(origList, realSender)
+	}
+
+	var lastErr error
+	for _, s := range senderList {
+		for _, o := range origList {
+			secretKey, additionalData := generateMsgSecretKey(useCase, s, origMsgKey.GetID(), o, baseEncKey)
+			plaintext, err := gcmutil.Decrypt(secretKey, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData)
+			if err == nil {
+				if s != msg.Info.Sender || o != origSender {
+					zerolog.Ctx(ctx).Debug().
+						Str("orig_message_id", origMsgKey.GetID()).
+						Str("secret_message_id", msg.Info.ID).
+						Stringer("used_sender", s).
+						Stringer("used_orig_sender", o).
+						Msg("Decrypted message secret with alt sender hack")
+				} else {
+					zerolog.Ctx(ctx).Debug().
+						Str("orig_message_id", origMsgKey.GetID()).
+						Str("secret_message_id", msg.Info.ID).
+						Stringer("stored_orig_sender", realSender).
+						Stringer("key_orig_sender", origSender).
+						Msg("Decrypted message secret without hack")
+				}
+				return plaintext, nil
+			}
+			lastErr = err
+		}
+	}
+	return nil, fmt.Errorf("failed to decrypt secret message: %w (sender: %s/%s, orig sender: %s and %s)", lastErr, msg.Info.Sender, msg.Info.SenderAlt, origSender, realSender)
 }
 
 func (cli *Client) encryptMsgSecret(ctx context.Context, ownID, chat, origSender types.JID, origMsgID types.MessageID, useCase MsgSecretType, plaintext []byte) (ciphertext, iv []byte, err error) {
