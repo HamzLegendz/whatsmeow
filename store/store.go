@@ -50,6 +50,7 @@ type PreKeyStore interface {
 type SenderKeyStore interface {
 	PutSenderKey(ctx context.Context, group, user string, session []byte) error
 	GetSenderKey(ctx context.Context, group, user string) ([]byte, error)
+	DeleteSenderKey(ctx context.Context, group, user string) error
 }
 
 type AppStateSyncKey struct {

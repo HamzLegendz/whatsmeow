@@ -37,6 +37,9 @@ func (cli *Client) handleDecryptedArmadillo(ctx context.Context, info *types.Mes
 		} else {
 			skdm := dec.Transport.GetProtocol().GetAncillary().GetSkdm()
 			cli.handleSenderKeyDistributionMessage(ctx, info.Chat, info.Sender, skdm.AxolotlSenderKeyDistributionMessage)
+			if !info.SenderAlt.IsEmpty() {
+				cli.handleSenderKeyDistributionMessage(ctx, info.Chat, info.SenderAlt, skdm.AxolotlSenderKeyDistributionMessage)
+			}
 		}
 	}
 	if dec.Message != nil || dec.FBApplication != nil {

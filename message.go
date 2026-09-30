@@ -409,8 +409,29 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			cli.Log.Debugf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			continue
 		} else if errors.Is(err, signalerror.ErrOldCounter) {
-			cli.Log.Warnf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
-			continue
+			cli.Log.Warnf("Old counter error decrypting message %s from %s in %s: %v, resetting sender key and requesting retry", info.ID, info.SourceString(), info.Chat, err)
+			if encType == "skmsg" && cli.Store != nil && cli.Store.SenderKeys != nil {
+				_ = cli.Store.SenderKeys.DeleteSenderKey(ctx, info.Chat.String(), senderEncryptionJID.SignalAddress().String())
+				if !info.Sender.IsEmpty() {
+					_ = cli.Store.SenderKeys.DeleteSenderKey(ctx, info.Chat.String(), info.Sender.SignalAddress().String())
+				}
+				if !info.SenderAlt.IsEmpty() {
+					_ = cli.Store.SenderKeys.DeleteSenderKey(ctx, info.Chat.String(), info.SenderAlt.SignalAddress().String())
+				}
+			}
+			if cli.SynchronousAck {
+				cli.sendRetryReceipt(ctx, node, info, true)
+				cli.sendAck(ctx, node, 0)
+			} else {
+				go cli.sendRetryReceipt(context.WithoutCancel(ctx), node, info, true)
+				go cli.sendAck(ctx, node, 0)
+			}
+			cli.dispatchEvent(&events.UndecryptableMessage{
+				Info:            *info,
+				IsUnavailable:   true,
+				DecryptFailMode: events.DecryptFailMode(ag.OptionalString("decrypt-fail")),
+			})
+			return
 		} else if err != nil {
 			cli.Log.Warnf("Error decrypting message %s from %s: %v", info.ID, info.SourceString(), err)
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
@@ -653,6 +674,26 @@ func (cli *Client) decryptGroupMsg(ctx context.Context, child *waBinary.Node, fr
 	plaintext, ciphertextHash, err := cli.bufferedDecrypt(ctx, content, serverTS, func(decryptCtx context.Context) ([]byte, error) {
 		return cipher.Decrypt(decryptCtx, msg)
 	}, "senderkey", chat.String(), from.String())
+	if errors.Is(err, signalerror.ErrNoSenderKeyForUser) && cli.Store != nil && cli.Store.LIDs != nil {
+		var altFrom types.JID
+		if from.Server == types.HiddenUserServer {
+			altFrom, _ = cli.Store.LIDs.GetPNForLID(ctx, from)
+		} else if from.Server == types.DefaultUserServer {
+			altFrom, _ = cli.Store.LIDs.GetLIDForPN(ctx, from)
+		}
+		if !altFrom.IsEmpty() && altFrom != from {
+			altSenderKeyName := protocol.NewSenderKeyName(chat.String(), altFrom.SignalAddress())
+			altCipher := groups.NewGroupCipher(builder, altSenderKeyName, cli.Store)
+			plaintext, ciphertextHash, err = cli.bufferedDecrypt(ctx, content, serverTS, func(decryptCtx context.Context) ([]byte, error) {
+				return altCipher.Decrypt(decryptCtx, msg)
+			}, "senderkey", chat.String(), altFrom.String())
+			if err == nil && cli.Store.SenderKeys != nil {
+				if rawKey, loadErr := cli.Store.SenderKeys.GetSenderKey(ctx, chat.String(), altFrom.SignalAddress().String()); loadErr == nil && len(rawKey) > 0 {
+					_ = cli.Store.SenderKeys.PutSenderKey(ctx, chat.String(), from.SignalAddress().String(), rawKey)
+				}
+			}
+		}
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to decrypt group message: %w", err)
 	}
@@ -705,6 +746,18 @@ func (cli *Client) handleSenderKeyDistributionMessage(ctx context.Context, chat,
 	if err != nil {
 		cli.Log.Errorf("Failed to process sender key distribution message from %s for %s: %v", from, chat, err)
 		return
+	}
+	if cli.Store != nil && cli.Store.LIDs != nil {
+		var altFrom types.JID
+		if from.Server == types.HiddenUserServer {
+			altFrom, _ = cli.Store.LIDs.GetPNForLID(ctx, from)
+		} else if from.Server == types.DefaultUserServer {
+			altFrom, _ = cli.Store.LIDs.GetLIDForPN(ctx, from)
+		}
+		if !altFrom.IsEmpty() && altFrom != from {
+			altSenderKeyName := protocol.NewSenderKeyName(chat.String(), altFrom.SignalAddress())
+			_ = builder.Process(ctx, altSenderKeyName, sdkMsg)
+		}
 	}
 	cli.Log.Debugf("Processed sender key distribution message from %s in %s", senderKeyName.Sender().String(), senderKeyName.GroupID())
 }
@@ -947,10 +1000,22 @@ func (cli *Client) processProtocolParts(ctx context.Context, info *types.Message
 			cli.Log.Warnf("Got sender key distribution message in non-group chat from %s", info.Sender)
 		} else {
 			encryptionIdentity := info.Sender
-			if encryptionIdentity.Server == types.DefaultUserServer && info.SenderAlt.Server == types.HiddenUserServer {
-				encryptionIdentity = info.SenderAlt
+			if encryptionIdentity.Server == types.DefaultUserServer {
+				if info.SenderAlt.Server == types.HiddenUserServer {
+					encryptionIdentity = info.SenderAlt
+				} else if cli.Store != nil && cli.Store.LIDs != nil {
+					if lid, err := cli.Store.LIDs.GetLIDForPN(ctx, info.Sender); err == nil && !lid.IsEmpty() {
+						encryptionIdentity = lid
+					}
+				}
 			}
 			cli.handleSenderKeyDistributionMessage(ctx, info.Chat, encryptionIdentity, msg.SenderKeyDistributionMessage.AxolotlSenderKeyDistributionMessage)
+			if !info.SenderAlt.IsEmpty() && info.SenderAlt != encryptionIdentity {
+				cli.handleSenderKeyDistributionMessage(ctx, info.Chat, info.SenderAlt, msg.SenderKeyDistributionMessage.AxolotlSenderKeyDistributionMessage)
+			}
+			if !info.Sender.IsEmpty() && info.Sender != encryptionIdentity {
+				cli.handleSenderKeyDistributionMessage(ctx, info.Chat, info.Sender, msg.SenderKeyDistributionMessage.AxolotlSenderKeyDistributionMessage)
+			}
 		}
 	}
 	// N.B. Edits are protocol messages, but they're also wrapped inside EditedMessage,

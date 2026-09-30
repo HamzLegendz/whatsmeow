@@ -125,6 +125,10 @@ func (n *NoopStore) GetSenderKey(ctx context.Context, group, user string) ([]byt
 	return nil, n.Error
 }
 
+func (n *NoopStore) DeleteSenderKey(ctx context.Context, group, user string) error {
+	return n.Error
+}
+
 func (n *NoopStore) PutAppStateSyncKey(ctx context.Context, id []byte, key AppStateSyncKey) error {
 	return n.Error
 }

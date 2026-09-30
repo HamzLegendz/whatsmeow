@@ -405,8 +405,9 @@ func (s *SQLStore) UploadedPreKeyCount(ctx context.Context) (count int, err erro
 }
 
 const (
-	getSenderKeyQuery = `SELECT sender_key FROM whatsmeow_sender_keys WHERE our_jid=$1 AND chat_id=$2 AND sender_id=$3`
-	putSenderKeyQuery = `
+	getSenderKeyQuery    = `SELECT sender_key FROM whatsmeow_sender_keys WHERE our_jid=$1 AND chat_id=$2 AND sender_id=$3`
+	deleteSenderKeyQuery = `DELETE FROM whatsmeow_sender_keys WHERE our_jid=$1 AND chat_id=$2 AND sender_id=$3`
+	putSenderKeyQuery    = `
 		INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key
 	`
@@ -423,6 +424,11 @@ func (s *SQLStore) GetSenderKey(ctx context.Context, group, user string) (key []
 		err = nil
 	}
 	return
+}
+
+func (s *SQLStore) DeleteSenderKey(ctx context.Context, group, user string) error {
+	_, err := s.db.Exec(ctx, deleteSenderKeyQuery, s.JID, group, user)
+	return err
 }
 
 const (
